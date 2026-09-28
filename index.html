@@ -1,0 +1,141 @@
+
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Kartodromo Live Timing</title>
+  <link rel="manifest" href="/manifest.json">
+  <style>
+    :root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0d1117;color:#fff}
+    *{box-sizing:border-box} body{margin:0;background:#0d1117}
+    header{padding:18px 16px;background:#151b24;position:sticky;top:0;z-index:5;border-bottom:1px solid #293241}
+    h1{margin:0;font-size:22px}.sub{opacity:.65;font-size:13px;margin-top:4px}
+    main{padding:16px;max-width:1000px;margin:auto}
+    .card{background:#151b24;border:1px solid #293241;border-radius:16px;padding:16px;margin-bottom:14px}
+    button,input{font:inherit;border-radius:12px;border:1px solid #364152;padding:12px;background:#0d1117;color:#fff}
+    button{background:#2d7ff9;border:0;font-weight:700;cursor:pointer} button.secondary{background:#293241}
+    button.danger{background:#d33}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+    label{display:block;font-size:13px;opacity:.75;margin-bottom:6px}.row{display:flex;gap:8px;flex-wrap:wrap}
+    .big{font-size:34px;font-weight:800}.green{color:#5ee38b}.muted{opacity:.65}
+    table{width:100%;border-collapse:collapse}th,td{padding:10px 6px;border-bottom:1px solid #293241;text-align:left}
+    .pill{display:inline-block;padding:5px 9px;border-radius:99px;background:#293241;font-size:12px}
+    #track{width:100%;border-radius:12px;display:block;margin-top:10px}
+    .hidden{display:none}.notice{font-size:13px;line-height:1.45;opacity:.8}
+  </style>
+</head>
+<body>
+<header>
+  <h1>🏁 Kartodromo Live Timing</h1>
+  <div class="sub">Versione GPS provvisoria — senza transponder</div>
+</header>
+<main>
+  <div class="card">
+    <div class="row">
+      <button id="controlBtn">CONTROLLO</button>
+      <button id="driverBtn" class="secondary">PILOTA</button>
+    </div>
+    <p class="notice">La modalità pilota usa il GPS del telefono sul kart. La modalità controllo riceve i dati live dai telefoni collegati.</p>
+  </div>
+
+  <section id="driverPanel" class="card hidden">
+    <h2>📱 Telefono sul kart</h2>
+    <div class="grid">
+      <div><label>Nome pilota</label><input id="name" placeholder="Giuseppe"></div>
+      <div><label>Numero kart</label><input id="kart" placeholder="7"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="join">COLLEGA KART</button>
+      <button id="leave" class="danger hidden">SCOLLEGA</button>
+    </div>
+    <p id="gpsStatus" class="notice">GPS non attivo.</p>
+    <div class="big" id="driverLap">—</div>
+    <div class="muted">Ultimo giro / Miglior giro</div>
+    <div id="driverTimes">— / —</div>
+  </section>
+
+  <section id="controlPanel" class="card">
+    <h2>🖥️ Direzione</h2>
+    <div class="row">
+      <button id="start">AVVIA SESSIONE</button>
+      <button id="stop" class="danger">STOP</button>
+    </div>
+    <p id="raceStatus" class="notice">Sessione ferma.</p>
+    <table>
+      <thead><tr><th>Pos.</th><th>Kart</th><th>Pilota</th><th>Ultimo</th><th>Migliore</th><th>GPS</th></tr></thead>
+      <tbody id="leaderboard"></tbody>
+    </table>
+    <img id="track" src="/pista.jpg" alt="Pista con traguardo indicato">
+  </section>
+</main>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io();
+let mode = "control";
+let watchId = null;
+let driverId = localStorage.getItem("driverId") || null;
+let finish = null; // Per la prima prova la linea viene calibrata sul posto.
+
+const $ = id => document.getElementById(id);
+function fmt(s){ return Number.isFinite(s) ? s.toFixed(3) + " s" : "—"; }
+
+$("controlBtn").onclick = () => { mode="control"; $("controlPanel").classList.remove("hidden"); $("driverPanel").classList.add("hidden"); };
+$("driverBtn").onclick = () => { mode="driver"; $("driverPanel").classList.remove("hidden"); $("controlPanel").classList.add("hidden"); };
+
+$("join").onclick = () => {
+  const name = $("name").value.trim() || "Pilota";
+  const kart = $("kart").value.trim() || "?";
+  driverId = driverId || crypto.randomUUID();
+  localStorage.setItem("driverId", driverId);
+  socket.emit("driver:join", {id:driverId,name,kart});
+  $("join").classList.add("hidden"); $("leave").classList.remove("hidden");
+  $("gpsStatus").textContent = "Richiesta posizione GPS…";
+  if (!navigator.geolocation) {
+    $("gpsStatus").textContent = "Questo telefono non supporta il GPS del browser.";
+    return;
+  }
+  watchId = navigator.geolocation.watchPosition(pos => {
+    const {latitude:lat, longitude:lng, accuracy} = pos.coords;
+    socket.emit("driver:position", {lat,lng,accuracy});
+    $("gpsStatus").textContent = `GPS attivo • precisione dichiarata ±${Math.round(accuracy)} m`;
+    // Rilevamento del traguardo: finish verrà calibrato con due punti GPS nella versione successiva.
+  }, err => {
+    $("gpsStatus").textContent = "GPS non disponibile: " + err.message;
+  }, {enableHighAccuracy:true, maximumAge:1000, timeout:10000});
+};
+
+$("leave").onclick = () => {
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  socket.emit("driver:leave");
+  $("leave").classList.add("hidden"); $("join").classList.remove("hidden");
+  $("gpsStatus").textContent = "Scollegato.";
+};
+
+$("start").onclick = () => socket.emit("race:start");
+$("stop").onclick = () => socket.emit("race:stop");
+
+socket.on("state", ({drivers,race}) => {
+  render(drivers,race);
+});
+socket.on("driver:position", () => {});
+socket.on("driver:lap", () => {});
+socket.on("race", race => $("raceStatus").textContent = race.running ? "🟢 Sessione in corso" : "⚪ Sessione ferma");
+socket.on("driver:offline", () => {});
+
+function render(drivers,race){
+  $("raceStatus").textContent = race.running ? "🟢 Sessione in corso" : "⚪ Sessione ferma";
+  const rows = drivers
+    .filter(d=>d.online !== false)
+    .sort((a,b)=>(a.bestLap??Infinity)-(b.bestLap??Infinity))
+    .map((d,i)=>`<tr>
+      <td>${i+1}</td><td><b>${escapeHtml(d.kart)}</b></td><td>${escapeHtml(d.name)}</td>
+      <td>${fmt(d.lastLap)}</td><td>${fmt(d.bestLap)}</td>
+      <td><span class="pill">${d.lat ? "LIVE" : "—"}</span></td>
+    </tr>`).join("");
+  $("leaderboard").innerHTML = rows || '<tr><td colspan="6" class="muted">Nessun kart collegato.</td></tr>';
+}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
+</script>
+</body>
+</html>
