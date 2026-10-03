@@ -167,31 +167,65 @@ $("join").onclick = () => {
     $("gpsStatus").textContent=`GPS attivo • precisione dichiarata ±${Math.round(accuracy)} m`;
 
     if(finish && raceRunning){
-      const dist=distanceMeters(lat,lng,finish.lat,finish.lng);
-      const now=Date.now();
-      const inside=dist<=FINISH_RADIUS_M;
-      let crossed=inside && (previousDistance===null || previousDistance>FINISH_RADIUS_M);
-      if(!crossed && previousLat!==null && previousLng!==null){
-        const segDist=pointToSegmentDistanceMeters(finish.lat,finish.lng,previousLat,previousLng,lat,lng);
-        const jumpedAcross = previousDistance>FINISH_RADIUS_M && dist>FINISH_RADIUS_M && segDist<=FINISH_RADIUS_M;
-        crossed=jumpedAcross;
-      }
-      if(crossed && now-lastCrossingAt>=MIN_CROSSING_GAP_MS){
-        lastCrossingAt=now;
-        if(lapStart===null){
-          lapStart=performance.now();
-          lapCount=0;
-          $("driverLap").textContent="GIRO PARTITO";
-        } else {
-          const seconds=(performance.now()-lapStart)/1000;
-          lapStart=performance.now();
-          lapCount++;
-          bestLapLocal=bestLapLocal==null?seconds:Math.min(bestLapLocal,seconds);
-          $("driverTimes").textContent=`${fmt(seconds)} / ${fmt(bestLapLocal)}`;
-          $("driverLap").textContent=`GIRO ${lapCount}`;
-          socket.emit("driver:lap",{lap:lapCount,seconds});
-        }
-      }
+  const dist=distanceMeters(lat,lng,finish.lat,finish.lng);
+  const now=Date.now();
+
+  // Velocità GPS: ignoriamo falsi attraversamenti quando il kart è fermo
+  const speedKmh = pos.coords.speed == null ? 0 : pos.coords.speed * 3.6;
+  const moving = speedKmh >= 10;
+
+  const crossed =
+    previousDistance !== null &&
+    previousDistance > FINISH_RADIUS_M &&
+    dist <= FINISH_RADIUS_M &&
+    moving;
+
+  if(crossed && previousLat!==null && previousLng!==null){
+    const segDist=pointToSegmentDistanceMeters(
+      finish.lat,finish.lng,
+      previousLat,previousLng,
+      lat,lng
+    );
+
+    const jumpedAcross =
+      previousDistance>FINISH_RADIUS_M &&
+      dist>FINISH_RADIUS_M &&
+      segDist<=FINISH_RADIUS_M;
+
+    if(jumpedAcross){
+      crossed=true;
+    }
+  }
+
+  if(crossed && now-lastCrossingAt>=MIN_CROSSING_GAP_MS){
+    lastCrossingAt=now;
+
+    if(lapStart===null){
+      lapStart=performance.now();
+      lapCount=0;
+      $("#driverLap").textContent="GIRO PARTITO";
+    }else{
+      const seconds=(performance.now()-lapStart)/1000;
+      lapStart=performance.now();
+      lapCount++;
+      bestLapLocal=bestLapLocal===null?seconds:Math.min(bestLapLocal,seconds);
+
+      $("#driverTimes").textContent=
+        `${fmt(seconds)} s / ${fmt(bestLapLocal)} s`;
+
+      $("#driverLap").textContent=`GIRO ${lapCount}`;
+
+      socket.emit("driver:lap",{
+        lap:lapCount,
+        seconds:seconds
+      });
+    }
+  }
+
+  previousDistance=dist;
+  previousLat=lat;
+  previousLng=lng;
+}
       previousDistance=dist;
       previousLat=lat;
       previousLng=lng;
