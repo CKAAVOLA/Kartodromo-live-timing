@@ -81,12 +81,14 @@ let watchId = null;
 let driverId = localStorage.getItem("driverId") || null;
 let finish = JSON.parse(localStorage.getItem("finishPoint") || "null");
 let previousDistance = null;
+let previousLat = null;
+let previousLng = null;
 let lapStart = null;
 let lastCrossingAt = 0;
 let lapCount = 0;
 let bestLapLocal = null;
 let raceRunning = false;
-const FINISH_RADIUS_M = 10;
+const FINISH_RADIUS_M = 20;
 const MIN_CROSSING_GAP_MS = 10000;
 
 const $ = id => document.getElementById(id);
@@ -98,6 +100,18 @@ function distanceMeters(lat1,lng1,lat2,lng2){
   const dp=toRad(lat2-lat1), dl=toRad(lng2-lng1);
   const a=Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
   return 2*R*Math.asin(Math.sqrt(a));
+}
+
+function pointToSegmentDistanceMeters(px,py,ax,ay,bx,by){
+  const lat0=px*Math.PI/180;
+  const kx=111320*Math.cos(lat0), ky=110540;
+  const x1=ax*kx, y1=ay*ky, x2=bx*kx, y2=by*ky, x=px*kx, y=py*ky;
+  const dx=x2-x1, dy=y2-y1;
+  const len2=dx*dx+dy*dy;
+  let t=len2 ? ((x-x1)*dx+(y-y1)*dy)/len2 : 0;
+  t=Math.max(0,Math.min(1,t));
+  const cx=x1+t*dx, cy=y1+t*dy;
+  return Math.hypot(x-cx,y-cy);
 }
 
 function updateFinishStatus(){
@@ -123,7 +137,7 @@ $("calibrate").onclick = () => {
   navigator.geolocation.getCurrentPosition(pos=>{
     finish={lat:pos.coords.latitude,lng:pos.coords.longitude};
     localStorage.setItem("finishPoint",JSON.stringify(finish));
-    previousDistance=null; lapStart=null; lapCount=0; lastCrossingAt=0;
+    previousDistance=null; previousLat=null; previousLng=null; lapStart=null; lapCount=0; lastCrossingAt=0;
     updateFinishStatus();
   },err=>{
     $("finishStatus").textContent="Errore GPS: "+err.message;
@@ -132,7 +146,7 @@ $("calibrate").onclick = () => {
 
 $("clearFinish").onclick = () => {
   finish=null; localStorage.removeItem("finishPoint");
-  previousDistance=null; lapStart=null; lapCount=0; lastCrossingAt=0;
+  previousDistance=null; previousLat=null; previousLng=null; lapStart=null; lapCount=0; lastCrossingAt=0;
   updateFinishStatus();
 };
 
@@ -156,8 +170,13 @@ $("join").onclick = () => {
       const dist=distanceMeters(lat,lng,finish.lat,finish.lng);
       const now=Date.now();
       const inside=dist<=FINISH_RADIUS_M;
-      const wasOutside=previousDistance===null || previousDistance>FINISH_RADIUS_M;
-      if(inside && wasOutside && now-lastCrossingAt>=MIN_CROSSING_GAP_MS){
+      let crossed=inside && (previousDistance===null || previousDistance>FINISH_RADIUS_M);
+      if(!crossed && previousLat!==null && previousLng!==null){
+        const segDist=pointToSegmentDistanceMeters(finish.lat,finish.lng,previousLat,previousLng,lat,lng);
+        const jumpedAcross = previousDistance>FINISH_RADIUS_M && dist>FINISH_RADIUS_M && segDist<=FINISH_RADIUS_M;
+        crossed=jumpedAcross;
+      }
+      if(crossed && now-lastCrossingAt>=MIN_CROSSING_GAP_MS){
         lastCrossingAt=now;
         if(lapStart===null){
           lapStart=performance.now();
@@ -174,6 +193,8 @@ $("join").onclick = () => {
         }
       }
       previousDistance=dist;
+      previousLat=lat;
+      previousLng=lng;
     }
   },err=>{
     $("gpsStatus").textContent="GPS non disponibile: "+err.message;
